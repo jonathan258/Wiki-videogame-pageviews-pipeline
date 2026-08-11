@@ -11,8 +11,10 @@ def flatten_results(results: dict) -> list[dict]:
     """
     flattened_data = []
 
+    # Go through each article and each item inside its response.
     for article_title, response_data in results.items():
         for item in response_data.get("items", []):
+            # Make one simple record for each day of pageviews.
             record = {
                 "project": item.get("project"),
                 "article": item.get("article"),
@@ -23,4 +25,5 @@ def flatten_results(results: dict) -> list[dict]:
 
             flattened_data.append(record)
 
+    # Return the list of simple row dictionaries.
     return flattened_data

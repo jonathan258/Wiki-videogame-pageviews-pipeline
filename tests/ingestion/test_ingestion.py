@@ -22,6 +22,7 @@ What is happening in this unit test
 def test_fetch_api_data_success(mock_get):
     mock_response = Mock()
     
+    # Make fake JSON data that looks like the Wikipedia API response.
     mock_response.json.return_value = {
         "items": [
             {
@@ -35,6 +36,7 @@ def test_fetch_api_data_success(mock_get):
     
     mock_response.raise_for_status.return_value = None
     
+    # When requests.get is called, return our fake response.
     mock_get.return_value = mock_response
     
     result = fetch_api_data(
@@ -43,6 +45,7 @@ def test_fetch_api_data_success(mock_get):
         "20220131"
         )
 
+    # The function should return the fake JSON data.
     assert result == mock_response.json.return_value
     mock_get.assert_called_once()
     
