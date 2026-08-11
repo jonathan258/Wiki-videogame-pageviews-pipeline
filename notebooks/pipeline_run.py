@@ -1,3 +1,7 @@
+import sys
+import os
+
+sys.path.append(os.path.abspath("../src"))
 from ingestion.ingestion import fetch_api_data
 from transform.flatten import flatten_results
 from loading.loading import write_bronze
