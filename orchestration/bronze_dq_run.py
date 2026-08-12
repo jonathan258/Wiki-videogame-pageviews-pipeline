@@ -81,7 +81,7 @@ ARTICLE_TITLES = [
     "Minecraft",
     "Fortnite_(video_game)",
     "Grand_Theft_Auto_V",
-    "Call_of_Duty:*Modern_Warfare*(2019_video_game)",
+    "Call_of_Duty:_Modern_Warfare_(2019_video_game)",
     "Among_Us_(video_game)",
     "Cyberpunk_2077",
     "The_Witcher_3:_Wild_Hunt",
