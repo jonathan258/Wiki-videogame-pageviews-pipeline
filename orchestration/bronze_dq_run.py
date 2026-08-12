@@ -1,55 +1,128 @@
 """
 Bronze Data Quality Runner
 
-This module runs all Bronze-layer data quality checks against the
+This module orchestrates all Bronze-layer data quality checks against the
 real Bronze table stored in Unity Catalog.
 
-This code is intended to run inside Databricks because it requires
-a live Spark session connected to Unity Catalog.
+This file is intended to run inside Databricks because it requires a live
+Spark session connected to Unity Catalog.
 
 The workflow is:
 
     1. Load the Bronze table.
-    2. Run each registered data quality check.
-    3. Convert the results into a consistent DQ result format.
-    4. Store the results in the DQ results Delta table.
-    5. Fail the job if a hard FAIL is detected.
+    2. Run the registered data quality checks.
+    3. Normalize the results into one consistent structure.
+    4. Write the results to the DQ results Delta table.
+    5. Fail the Databricks Job if a hard FAIL is detected.
 
 WARN results are recorded but do not stop the pipeline.
-FAIL results are recorded and stop downstream processing.
-"""
-import sys
-import os
 
-<<<<<<< HEAD
+FAIL results are recorded and stop downstream processing.
+
+The individual validation modules are responsible for checking the data.
+
+This orchestration module is responsible for deciding what to do with
+those results.
+"""
+
+
+# ============================================================================
+# Imports
+# ============================================================================
+
+import os
+import sys
 import uuid
 from datetime import datetime, timezone
 
-from validation import check_coverage, check_duplicates
+from pyspark.sql import SparkSession
+
+
+# ============================================================================
+# Project Imports
+# ============================================================================
+
+# The validation package lives inside the project's src directory.
+#
+# This path adjustment allows the Databricks notebook/job to find the
+# validation modules when the repository is not installed as a Python package.
+#
+# Eventually, once the project is packaged properly, this can be removed
+# and the imports can use the installed package directly.
+
+sys.path.append(
+    os.path.abspath("../src")
+)
+
+from validation import (
+    check_coverage,
+    check_duplicates,
+    check_schema,
+)
 
 
 # ============================================================================
 # Configuration
 # ============================================================================
+
+# ---------------------------------------------------------------------------
+# Articles expected in the Bronze table
+# ---------------------------------------------------------------------------
 #
-# These values describe what data we expect to find in Bronze.
+# These should match the article list used by the ingestion pipeline.
 #
-# Eventually, this configuration should be moved into a shared configuration
-# file so that ingestion and data-quality checks do not maintain separate
-# copies of the same information.
-# ============================================================================
+# Keeping this list here works for the current project, but eventually we
+# should move shared configuration into one central configuration file so
+# ingestion and DQ checks cannot accidentally use different lists.
+# ---------------------------------------------------------------------------
 
 ARTICLE_TITLES = [
-=======
-sys.path.append(os.path.abspath("../src"))
+    "The_Legend_of_Zelda",
+    "Super_Mario_Bros.",
+    "Minecraft",
+    "Fortnite_(video_game)",
+    "Grand_Theft_Auto_V",
+    "Call_of_Duty:*Modern_Warfare*(2019_video_game)",
+    "Among_Us_(video_game)",
+    "Cyberpunk_2077",
+    "The_Witcher_3:_Wild_Hunt",
+    "Red_Dead_Redemption_2",
+]
 
-from validation import check_coverage, check_duplicates, check_schema
 
-# These need to match the same values used in pipeline_run.py.
-# (Worth deciding later where these should really live so you're
-# not maintaining the same list in two places.)
+# ---------------------------------------------------------------------------
+# Expected coverage period
+# ---------------------------------------------------------------------------
+#
+# The coverage check uses these dates to determine whether every expected
+# article/date combination exists in Bronze.
+#
+# Both dates are inclusive.
+#
+# January 1 through January 31:
+#
+#     10 articles × 31 days = 310 expected combinations
+# ---------------------------------------------------------------------------
 
-expected_schema = {
+START_DATE = "20260101"
+END_DATE = "20260131"
+
+
+# ---------------------------------------------------------------------------
+# Expected Bronze schema
+# ---------------------------------------------------------------------------
+#
+# These are the columns and Spark data types we expect to find in the
+# Bronze table.
+#
+# This allows the schema DQ check to detect:
+#
+#     - Missing columns
+#     - Incorrect data types
+#     - Unexpected columns
+# ---------------------------------------------------------------------------
+
+EXPECTED_SCHEMA = {
     "article": "string",
     "granularity": "string",
     "project": "string",
@@ -59,72 +132,51 @@ expected_schema = {
     "_ingestion_job_run_id": "string",
 }
 
-article_titles = [
->>>>>>> 7da07fa29705692944ab202ad9813a813010744e
-    "The_Legend_of_Zelda",
-    "Super_Mario_Bros.",
-    "Minecraft",
-    "Fortnite_(video_game)",
-    "Grand_Theft_Auto_V",
-    "Call_of_Duty:_Modern_Warfare_(2019_video_game)",
-    "Among_Us_(video_game)",
-    "Cyberpunk_2077",
-    "The_Witcher_3:_Wild_Hunt",
-    "Red_Dead_Redemption_2",
-]
 
-# The Bronze coverage check uses these dates to determine whether every
-# expected article/date combination was received.
-START_DATE = "20260101"
-END_DATE = "20260131"
+# ---------------------------------------------------------------------------
+# Unity Catalog Bronze table
+# ---------------------------------------------------------------------------
 
-
-# Unity Catalog location of the Bronze table.
 CATALOG = "wiki_videogame_ingestion"
 SCHEMA = "bronze"
 TABLE = "wiki_videogame_pageviews"
 
-<<<<<<< HEAD
 BRONZE_TABLE = f"{CATALOG}.{SCHEMA}.{TABLE}"
-=======
-schema_result = check_schema(df=bronze_df, expected_schema=expected_schema)
-print(schema_result["check_name"], schema_result["status"], schema_result["mismatches"])
-
-for field in bronze_df.schema:
-    print(field.name, field.dataType.simpleString())
-    
-print(
-    coverage_result["check_name"],
-    coverage_result["status"],
-    coverage_result["missing_count"],
-)
->>>>>>> 7da07fa29705692944ab202ad9813a813010744e
 
 
-# All data-quality results are stored in this Delta table.
+# ---------------------------------------------------------------------------
+# DQ results table
+# ---------------------------------------------------------------------------
 #
-# Keeping the results in a table gives us an audit history instead of only
-# printing the results to the Databricks notebook.
-DQ_RESULTS_TABLE = f"{CATALOG}.{SCHEMA}.dq_check_results"
+# All DQ results are stored in a Delta table.
+#
+# Keeping the results in a table gives us an audit history instead of
+# relying only on Databricks Job logs.
+# ---------------------------------------------------------------------------
+
+DQ_RESULTS_TABLE = (
+    f"{CATALOG}.{SCHEMA}.dq_check_results"
+)
 
 
 # ============================================================================
 # Bronze Data Quality Orchestration
 # ============================================================================
 
-def run_bronze_dq_checks(spark) -> str:
+def run_bronze_dq_checks(
+    spark: SparkSession,
+) -> str:
     """
     Run all Bronze-layer data quality checks.
 
-    The function is responsible for orchestrating the checks. The individual
-    validation modules are responsible for determining whether their specific
-    check passes, warns, or fails.
+    The function:
 
-    After all checks complete:
-
-        - Results are written to the DQ results Delta table.
-        - WARN results are recorded but allow the pipeline to continue.
-        - FAIL results cause the job to fail and prevent downstream processing.
+        1. Creates a unique DQ run ID.
+        2. Loads the Bronze table.
+        3. Runs coverage, duplicate, and schema checks.
+        4. Normalizes their results.
+        5. Writes the results to the DQ audit table.
+        6. Raises an exception if a hard FAIL exists.
 
     Args:
         spark:
@@ -136,41 +188,68 @@ def run_bronze_dq_checks(spark) -> str:
     """
 
     # ------------------------------------------------------------------------
-    # Create a unique ID for this DQ execution.
-    #
-    # Every check performed during this run receives the same ID. This allows
-    # us to query all results belonging to one DQ run later.
-    # ------------------------------------------------------------------------
-
-    check_run_id = str(uuid.uuid4())
-
-    # Use UTC so that DQ timestamps are consistent regardless of where the
-    # Databricks job is running.
-    checked_at = datetime.now(timezone.utc)
-
-    # ------------------------------------------------------------------------
-    # Load Bronze data
+    # Step 1: Create a unique ID for this DQ execution
     # ------------------------------------------------------------------------
     #
-    # The DQ checks should run against the actual Bronze table that was
-    # produced by ingestion, rather than against a local file or test data.
+    # Every check performed during this execution receives the same ID.
+    #
+    # This allows us to query all results belonging to one DQ run later.
+    #
+    # Example:
+    #
+    #     check_run_id = "550e8400-e29b-41d4-a716-446655440000"
     # ------------------------------------------------------------------------
 
-    bronze_df = spark.table(BRONZE_TABLE)
+    check_run_id = str(
+        uuid.uuid4()
+    )
+
 
     # ------------------------------------------------------------------------
-    # Run Bronze data quality checks
+    # Step 2: Record the execution timestamp
     # ------------------------------------------------------------------------
     #
-    # Each validation function is responsible for performing one specific
-    # type of check and returning its result.
-    #
-    # Keeping these checks separate makes the code easier to test and allows
-    # us to add additional checks later without putting all of the validation
-    # logic into this orchestration file.
+    # UTC is used so timestamps remain consistent regardless of where the
+    # Databricks Job happens to execute.
     # ------------------------------------------------------------------------
 
-    # Check whether every expected article/date combination exists.
+    checked_at = datetime.now(
+        timezone.utc
+    )
+
+
+    # ------------------------------------------------------------------------
+    # Step 3: Load the real Bronze table
+    # ------------------------------------------------------------------------
+    #
+    # The DQ checks must run against the actual data produced by ingestion.
+    #
+    # This ensures that the validation layer is checking the same Bronze
+    # table that downstream Silver processing will consume.
+    # ------------------------------------------------------------------------
+
+    bronze_df = spark.table(
+        BRONZE_TABLE
+    )
+
+
+    # =========================================================================
+    # Step 4: Run Data Quality Checks
+    # =========================================================================
+
+    # ------------------------------------------------------------------------
+    # Coverage Check
+    # ------------------------------------------------------------------------
+    #
+    # Checks whether every expected article/date combination exists.
+    #
+    # Example:
+    #
+    #     10 articles × 31 days = 310 expected combinations
+    #
+    # If only 287 exist, the check identifies the 23 missing combinations.
+    # ------------------------------------------------------------------------
+
     coverage_result = check_coverage(
         df=bronze_df,
         spark=spark,
@@ -179,37 +258,44 @@ def run_bronze_dq_checks(spark) -> str:
         end_date=END_DATE,
     )
 
-    # Check whether duplicate article/date records exist.
+
+    # ------------------------------------------------------------------------
+    # Duplicate Check
+    # ------------------------------------------------------------------------
+    #
+    # Checks whether the article/timestamp business key appears more than
+    # once in Bronze.
+    # ------------------------------------------------------------------------
+
     duplicate_result = check_duplicates(
         df=bronze_df
     )
 
+
     # ------------------------------------------------------------------------
-    # Display the Bronze schema
+    # Schema Check
     # ------------------------------------------------------------------------
     #
-    # This is useful during development and debugging because it lets us
-    # confirm that the Bronze table contains the expected columns and data
-    # types.
+    # Checks whether the Bronze table has:
     #
-    # This can eventually be replaced by a dedicated schema DQ check.
+    #     - All expected columns
+    #     - Correct data types
+    #     - No unexpected columns
     # ------------------------------------------------------------------------
 
-    print("Bronze table schema:")
+    schema_result = check_schema(
+        df=bronze_df,
+        expected_schema=EXPECTED_SCHEMA,
+    )
 
-    for field in bronze_df.schema:
-        print(
-            f"{field.name}: "
-            f"{field.dataType.simpleString()}"
-        )
 
-    # ------------------------------------------------------------------------
-    # Display individual check results
-    # ------------------------------------------------------------------------
+    # =========================================================================
+    # Step 5: Display Check Results
+    # =========================================================================
     #
     # These messages make the Databricks Job output easier to understand when
-    # looking at a particular run.
-    # ------------------------------------------------------------------------
+    # investigating a particular execution.
+    # =========================================================================
 
     print(
         f"{coverage_result['check_name']}: "
@@ -223,29 +309,54 @@ def run_bronze_dq_checks(spark) -> str:
         f"duplicate_count={duplicate_result['duplicate_count']}"
     )
 
+    print(
+        f"{schema_result['check_name']}: "
+        f"{schema_result['status']} | "
+        f"mismatches={len(schema_result['mismatches'])}"
+    )
+
+
     # ------------------------------------------------------------------------
-    # Normalize DQ results
+    # Display schema mismatches when they exist
     # ------------------------------------------------------------------------
     #
-    # Each validation function can return information specific to its check.
+    # If the schema check finds a problem, print the details so the Job
+    # output immediately tells us what changed.
+    # ------------------------------------------------------------------------
+
+    if schema_result["mismatches"]:
+
+        print("Schema mismatches:")
+
+        for mismatch in schema_result["mismatches"]:
+            print(
+                f"  - {mismatch}"
+            )
+
+
+    # =========================================================================
+    # Step 6: Normalize DQ Results
+    # =========================================================================
+    #
+    # Each validation function can return information specific to its own
+    # check.
+    #
     # Before storing the results, we convert them into one consistent schema.
     #
-    # This makes dq_check_results easier to query because every check uses
-    # the same columns:
+    # This gives the DQ audit table a predictable structure:
     #
-    #   check_run_id
-    #   layer
-    #   table_name
-    #   check_name
-    #   check_status
-    #   expected_value
-    #   actual_value
-    #   details
-    #   checked_at
+    #     check_run_id
+    #     layer
+    #     table_name
+    #     check_name
+    #     check_status
+    #     expected_value
+    #     actual_value
+    #     details
+    #     checked_at
     #
-    # The shared run ID and timestamp are added here rather than inside each
-    # validation function. This keeps the validation functions focused only
-    # on checking the data.
+    # The validation functions do not need to know anything about this
+    # audit-table structure.
     # ------------------------------------------------------------------------
 
     dq_rows = [
@@ -255,41 +366,89 @@ def run_bronze_dq_checks(spark) -> str:
             "table_name": BRONZE_TABLE,
             "check_name": coverage_result["check_name"],
             "check_status": coverage_result["status"],
-            "expected_value": None,
+            "expected_value": (
+                len(ARTICLE_TITLES)
+                * (
+                    (
+                        datetime.strptime(
+                            END_DATE,
+                            "%Y%m%d",
+                        )
+                        - datetime.strptime(
+                            START_DATE,
+                            "%Y%m%d",
+                        )
+                    ).days
+                    + 1
+                )
+            ),
             "actual_value": str(
                 coverage_result["missing_count"]
             ),
-            "details": None,
+            "details": (
+                f"Missing article/date combinations: "
+                f"{coverage_result['missing_count']}"
+            ),
             "checked_at": checked_at,
         },
+
         {
             "check_run_id": check_run_id,
             "layer": "bronze",
             "table_name": BRONZE_TABLE,
             "check_name": duplicate_result["check_name"],
             "check_status": duplicate_result["status"],
-            "expected_value": None,
+            "expected_value": "0",
             "actual_value": str(
                 duplicate_result["duplicate_count"]
             ),
-            "details": None,
+            "details": (
+                f"Duplicate article/timestamp combinations: "
+                f"{duplicate_result['duplicate_count']}"
+            ),
+            "checked_at": checked_at,
+        },
+
+        {
+            "check_run_id": check_run_id,
+            "layer": "bronze",
+            "table_name": BRONZE_TABLE,
+            "check_name": schema_result["check_name"],
+            "check_status": schema_result["status"],
+            "expected_value": "Expected schema",
+            "actual_value": (
+                "MATCH"
+                if not schema_result["mismatches"]
+                else "MISMATCH"
+            ),
+            "details": (
+                "; ".join(
+                    schema_result["mismatches"]
+                )
+                if schema_result["mismatches"]
+                else "Schema matches expected schema."
+            ),
             "checked_at": checked_at,
         },
     ]
 
-    # ------------------------------------------------------------------------
-    # Persist DQ results
-    # ------------------------------------------------------------------------
+
+    # =========================================================================
+    # Step 7: Write DQ Results
+    # =========================================================================
     #
-    # Write the results to a Delta table before checking for failures.
+    # The results are written BEFORE checking for failures.
     #
-    # This is intentional:
+    # This is intentional.
     #
-    # If the job fails because of a DQ failure, we still want the failed
-    # result recorded in the audit table so we can investigate what happened.
+    # If the Job fails because of a DQ problem, we still want the failed
+    # result recorded in the audit table so that we can investigate what
+    # happened.
     # ------------------------------------------------------------------------
 
-    dq_results_df = spark.createDataFrame(dq_rows)
+    dq_results_df = spark.createDataFrame(
+        dq_rows
+    )
 
     (
         dq_results_df
@@ -304,20 +463,27 @@ def run_bronze_dq_checks(spark) -> str:
         f"{DQ_RESULTS_TABLE}"
     )
 
-    # ------------------------------------------------------------------------
-    # Determine whether the pipeline should stop
-    # ------------------------------------------------------------------------
+
+    # =========================================================================
+    # Step 8: Determine Whether the Pipeline Should Stop
+    # =========================================================================
     #
     # WARN:
-    #     The data has an issue, but the pipeline is allowed to continue.
+    #     The check found a problem, but the pipeline is allowed to continue.
     #
     # FAIL:
-    #     The data-quality requirement was violated. Raise an exception so
-    #     the Databricks Job fails and downstream Silver processing does not
-    #     run.
+    #     The data-quality requirement was violated.
+    #     Raise an exception so the Databricks Job fails.
     #
-    # For example, our current partial January coverage situation can be
-    # represented as WARN, while duplicate records may be configured as FAIL.
+    # IMPORTANT:
+    #
+    # Our current validation functions return PASS or WARN.
+    #
+    # That means this block will only stop the pipeline once a check is
+    # explicitly configured to return FAIL.
+    #
+    # We can later introduce a DQ policy that determines which checks should
+    # be blocking.
     # ------------------------------------------------------------------------
 
     failures = [
@@ -325,6 +491,7 @@ def run_bronze_dq_checks(spark) -> str:
         for row in dq_rows
         if row["check_status"] == "FAIL"
     ]
+
 
     if failures:
 
@@ -339,13 +506,15 @@ def run_bronze_dq_checks(spark) -> str:
             f"(check_run_id={check_run_id})"
         )
 
-    # ------------------------------------------------------------------------
-    # Successful completion
-    # ------------------------------------------------------------------------
+
+    # =========================================================================
+    # Step 9: Successful Completion
+    # =========================================================================
     #
-    # If execution reaches this point, there were no hard FAIL results.
-    # WARN results may still exist, but they have been recorded and are not
-    # blocking the pipeline.
+    # Reaching this point means there were no hard FAIL results.
+    #
+    # WARN results may still exist, but they have already been recorded in
+    # the DQ audit table and do not block downstream processing.
     # ------------------------------------------------------------------------
 
     print(
@@ -354,3 +523,22 @@ def run_bronze_dq_checks(spark) -> str:
     )
 
     return check_run_id
+
+
+# ============================================================================
+# Script Entry Point
+# ============================================================================
+
+if __name__ == "__main__":
+
+    # Databricks provides the Spark session when this script is executed
+    # through the appropriate Job/notebook environment.
+    spark = SparkSession.builder.getOrCreate()
+
+    run_id = run_bronze_dq_checks(
+        spark
+    )
+
+    print(
+        f"Bronze DQ run completed: {run_id}"
+    )
