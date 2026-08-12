@@ -36,6 +36,11 @@ import uuid
 from datetime import datetime, timezone
 
 from pyspark.sql import SparkSession
+from validation import (
+    check_coverage,
+    check_duplicates,
+    check_schema,
+)
 
 
 # ============================================================================
@@ -52,12 +57,6 @@ from pyspark.sql import SparkSession
 
 sys.path.append(
     os.path.abspath("../src")
-)
-
-from validation import (
-    check_coverage,
-    check_duplicates,
-    check_schema,
 )
 
 
@@ -204,7 +203,6 @@ def run_bronze_dq_checks(
         uuid.uuid4()
     )
 
-
     # ------------------------------------------------------------------------
     # Step 2: Record the execution timestamp
     # ------------------------------------------------------------------------
@@ -216,7 +214,6 @@ def run_bronze_dq_checks(
     checked_at = datetime.now(
         timezone.utc
     )
-
 
     # ------------------------------------------------------------------------
     # Step 3: Load the real Bronze table
@@ -231,7 +228,6 @@ def run_bronze_dq_checks(
     bronze_df = spark.table(
         BRONZE_TABLE
     )
-
 
     # =========================================================================
     # Step 4: Run Data Quality Checks
@@ -258,7 +254,6 @@ def run_bronze_dq_checks(
         end_date=END_DATE,
     )
 
-
     # ------------------------------------------------------------------------
     # Duplicate Check
     # ------------------------------------------------------------------------
@@ -270,7 +265,6 @@ def run_bronze_dq_checks(
     duplicate_result = check_duplicates(
         df=bronze_df
     )
-
 
     # ------------------------------------------------------------------------
     # Schema Check
@@ -287,7 +281,6 @@ def run_bronze_dq_checks(
         df=bronze_df,
         expected_schema=EXPECTED_SCHEMA,
     )
-
 
     # =========================================================================
     # Step 5: Display Check Results
@@ -315,7 +308,6 @@ def run_bronze_dq_checks(
         f"mismatches={len(schema_result['mismatches'])}"
     )
 
-
     # ------------------------------------------------------------------------
     # Display schema mismatches when they exist
     # ------------------------------------------------------------------------
@@ -332,7 +324,6 @@ def run_bronze_dq_checks(
             print(
                 f"  - {mismatch}"
             )
-
 
     # =========================================================================
     # Step 6: Normalize DQ Results
@@ -432,7 +423,6 @@ def run_bronze_dq_checks(
         },
     ]
 
-
     # =========================================================================
     # Step 7: Write DQ Results
     # =========================================================================
@@ -463,7 +453,6 @@ def run_bronze_dq_checks(
         f"{DQ_RESULTS_TABLE}"
     )
 
-
     # =========================================================================
     # Step 8: Determine Whether the Pipeline Should Stop
     # =========================================================================
@@ -492,7 +481,6 @@ def run_bronze_dq_checks(
         if row["check_status"] == "FAIL"
     ]
 
-
     if failures:
 
         failed_checks = ", ".join(
@@ -505,7 +493,6 @@ def run_bronze_dq_checks(
             f"{failed_checks} "
             f"(check_run_id={check_run_id})"
         )
-
 
     # =========================================================================
     # Step 9: Successful Completion
