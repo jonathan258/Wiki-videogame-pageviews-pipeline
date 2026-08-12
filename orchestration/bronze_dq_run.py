@@ -18,7 +18,10 @@ The workflow is:
 WARN results are recorded but do not stop the pipeline.
 FAIL results are recorded and stop downstream processing.
 """
+import sys
+import os
 
+<<<<<<< HEAD
 import uuid
 from datetime import datetime, timezone
 
@@ -37,6 +40,27 @@ from validation import check_coverage, check_duplicates
 # ============================================================================
 
 ARTICLE_TITLES = [
+=======
+sys.path.append(os.path.abspath("../src"))
+
+from validation import check_coverage, check_duplicates, check_schema
+
+# These need to match the same values used in pipeline_run.py.
+# (Worth deciding later where these should really live so you're
+# not maintaining the same list in two places.)
+
+expected_schema = {
+    "article": "string",
+    "granularity": "string",
+    "project": "string",
+    "timestamp": "string",
+    "views": "bigint",
+    "_ingested_at": "timestamp",
+    "_ingestion_job_run_id": "string",
+}
+
+article_titles = [
+>>>>>>> 7da07fa29705692944ab202ad9813a813010744e
     "The_Legend_of_Zelda",
     "Super_Mario_Bros.",
     "Minecraft",
@@ -60,7 +84,21 @@ CATALOG = "wiki_videogame_ingestion"
 SCHEMA = "bronze"
 TABLE = "wiki_videogame_pageviews"
 
+<<<<<<< HEAD
 BRONZE_TABLE = f"{CATALOG}.{SCHEMA}.{TABLE}"
+=======
+schema_result = check_schema(df=bronze_df, expected_schema=expected_schema)
+print(schema_result["check_name"], schema_result["status"], schema_result["mismatches"])
+
+for field in bronze_df.schema:
+    print(field.name, field.dataType.simpleString())
+    
+print(
+    coverage_result["check_name"],
+    coverage_result["status"],
+    coverage_result["missing_count"],
+)
+>>>>>>> 7da07fa29705692944ab202ad9813a813010744e
 
 
 # All data-quality results are stored in this Delta table.
