@@ -4,12 +4,27 @@ in Unity Catalog. This file is meant to be run inside Databricks,
 since it needs a live Spark session connected to Unity Catalog —
 it won't work running locally on your laptop.
 """
+import sys
+import os
 
-from validation import check_coverage, check_duplicates
+sys.path.append(os.path.abspath("../src"))
+
+from validation import check_coverage, check_duplicates, check_schema
 
 # These need to match the same values used in pipeline_run.py.
 # (Worth deciding later where these should really live so you're
 # not maintaining the same list in two places.)
+
+expected_schema = {
+    "article": "string",
+    "granularity": "string",
+    "project": "string",
+    "timestamp": "string",
+    "views": "bigint",
+    "_ingested_at": "timestamp",
+    "_ingestion_job_run_id": "string",
+}
+
 article_titles = [
     "The_Legend_of_Zelda",
     "Super_Mario_Bros.",
@@ -42,6 +57,9 @@ coverage_result = check_coverage(
     start_date=start_date,
     end_date=end_date,
 )
+
+schema_result = check_schema(df=bronze_df, expected_schema=expected_schema)
+print(schema_result["check_name"], schema_result["status"], schema_result["mismatches"])
 
 for field in bronze_df.schema:
     print(field.name, field.dataType.simpleString())
