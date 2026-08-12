@@ -29,18 +29,14 @@ those results.
 # ============================================================================
 # Imports
 # ============================================================================
-
 import os
 import sys
+sys.path.append(os.path.abspath("../src"))
+
 import uuid
 from datetime import datetime, timezone
-
 from pyspark.sql import SparkSession
-from validation import (
-    check_coverage,
-    check_duplicates,
-    check_schema,
-)
+from validation import check_coverage, check_duplicates, check_schema
 
 
 # ============================================================================
