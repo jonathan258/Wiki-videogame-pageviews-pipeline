@@ -1,41 +1,180 @@
-'''What you're building: a function that takes your
-flat list of dicts, turns it into a Spark DataFrame,
-tags it with audit columns, and writes it as a Delta table in Unity Catalog.
+"""
+Wikipedia Pageview Response Transformer
 
-Step 1 — Look up: spark.createDataFrame()
-to createDataFrame from list of dicts
-'''
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import current_timestamp, lit
+This module converts the nested response returned by the Wikimedia API
+into a simple list of dictionaries that can be passed to the Bronze
+loading layer.
 
-spark = SparkSession.builder.appName("PageviewsLoader").getOrCreate()
+The API response is designed for the API consumer, not for our data
+pipeline. Before the data can be loaded into Spark, we need to transform
+it into a consistent row-oriented structure.
 
-# Spark is the big engine that reads, transforms, and writes data.
-# We create one session here so we can build DataFrames and write Delta tables.
+The intended flow is:
+
+    Wikimedia API
+          ↓
+    Nested API responses
+          ↓
+    flatten_results()
+          ↓
+    list[dict]
+          ↓
+    Bronze loader
+          ↓
+    Spark DataFrame
+          ↓
+    Bronze Delta table
+
+This module is responsible only for transforming the API response.
+
+It does NOT:
+
+    - Call the API.
+    - Write data to Unity Catalog.
+    - Run Spark transformations.
+    - Perform Bronze data-quality checks.
+"""
 
 
-def write_bronze(
-    records: list[dict],
-    catalog: str,
-    schema: str,
-    table: str,
-    ingestion_job_run_id: str,
-) -> None:
-    # Turn the list of Python dicts into a Spark DataFrame.
-    df = spark.createDataFrame(records)
+# ============================================================================
+# API Response Transformation
+# ============================================================================
 
-    # Add two audit columns so we know when and why the data was loaded.
-    df_with_audit = (
-        df.withColumn("_ingested_at", current_timestamp())
-          .withColumn("_ingestion_job_run_id", lit(ingestion_job_run_id))
-    )
+def flatten_results(
+    results: dict,
+) -> list[dict]:
+    """
+    Flatten nested Wikipedia API responses into row-level dictionaries.
 
-    # Show the data and schema in the console for quick checking.
-    df_with_audit.show()
-    df_with_audit.printSchema()
+    The API response contains multiple articles, with each article containing
+    a list of daily pageview records.
 
-    # Build the full Unity Catalog table name and write the data as Delta.
-    target_table = f"{catalog}.{schema}.{table}"
-    df_with_audit.write.format("delta").mode("append")\
-        .saveAsTable(target_table)
+    This function converts that nested structure into one dictionary per
+    pageview record.
 
+    Args:
+        results:
+            Dictionary containing API response data keyed by article title.
+
+            Expected structure:
+
+                {
+                    "Minecraft": {
+                        "items": [
+                            {...},
+                            {...},
+                        ]
+                    },
+                    "Fortnite_(video_game)": {
+                        "items": [
+                            {...},
+                            {...},
+                        ]
+                    }
+                }
+
+    Returns:
+        list[dict]:
+            A flattened list where each dictionary represents one pageview
+            record.
+
+            Example:
+
+                [
+                    {
+                        "project": "en.wikipedia.org",
+                        "article": "Minecraft",
+                        "granularity": "daily",
+                        "timestamp": "2026010100",
+                        "views": 12345,
+                    }
+                ]
+    """
+
+    # ------------------------------------------------------------------------
+    # Create the output collection
+    # ------------------------------------------------------------------------
+    #
+    # Each API pageview record will become one dictionary in this list.
+    #
+    # We use a list because the next layer of the pipeline will convert these
+    # records into a Spark DataFrame.
+    # ------------------------------------------------------------------------
+
+    flattened_data: list[dict] = []
+
+    # ------------------------------------------------------------------------
+    # Process each article
+    # ------------------------------------------------------------------------
+    #
+    # The outer dictionary is keyed by article title.
+    #
+    # Example:
+    #
+    #     "Minecraft" -> API response
+    #     "Fortnite"  -> API response
+    #
+    # We process each article independently so that all of its pageview
+    # records can be extracted.
+    # ------------------------------------------------------------------------
+
+    for article_title, response_data in results.items():
+
+        # --------------------------------------------------------------------
+        # Extract the pageview items
+        # --------------------------------------------------------------------
+        #
+        # The Wikimedia API stores the daily pageview records inside the
+        # "items" field.
+        #
+        # Using .get("items", []) means a missing "items" field results in an
+        # empty list instead of raising a KeyError.
+        #
+        # This allows the transformation to continue processing other
+        # articles if one API response is incomplete.
+        # --------------------------------------------------------------------
+
+        for item in response_data.get("items", []):
+
+            # ----------------------------------------------------------------
+            # Build one normalized record
+            # ----------------------------------------------------------------
+            #
+            # Instead of carrying the entire API response into Bronze, we
+            # explicitly select the fields our pipeline needs.
+            #
+            # This gives us a predictable internal schema and prevents
+            # unnecessary API-specific fields from leaking into downstream
+            # layers.
+            # ----------------------------------------------------------------
+
+            record = {
+                "project": item.get("project"),
+                "article": item.get("article"),
+                "granularity": item.get("granularity"),
+                "timestamp": item.get("timestamp"),
+                "views": item.get("views"),
+            }
+
+            # ---------------------------------------------------------------
+            # Add the normalized record to the output
+            # ---------------------------------------------------------------
+
+            flattened_data.append(record)
+
+    # ------------------------------------------------------------------------
+    # Return flattened records
+    # ------------------------------------------------------------------------
+    #
+    # The result is now ready to be passed to the Bronze loading layer.
+    #
+    # Example:
+    #
+    #     flattened_data
+    #         ↓
+    #     write_bronze()
+    #         ↓
+    #     Spark DataFrame
+    # ------------------------------------------------------------------------
+
+    return flattened_data
