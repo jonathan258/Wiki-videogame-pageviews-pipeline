@@ -42,6 +42,10 @@ coverage_result = check_coverage(
     start_date=start_date,
     end_date=end_date,
 )
+
+for field in bronze_df.schema:
+    print(field.name, field.dataType.simpleString())
+    
 print(
     coverage_result["check_name"],
     coverage_result["status"],
